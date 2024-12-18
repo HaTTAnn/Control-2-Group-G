@@ -38,16 +38,22 @@ class RegulatorModel:
 
 
     def propagation_model_regulator_fixed_std(self, x_ref=None):
-        S_bar = np.zeros((self.N*self.q, self.N*self.m))
-        T_bar = np.zeros((self.N*self.q, self.n))
-        Q_bar = np.zeros((self.N*self.q, self.N*self.q))
-        R_bar = np.zeros((self.N*self.m, self.N*self.m))
+        S_bar = np.zeros((self.N * self.q, self.N * self.m))
+        T_bar = np.zeros((self.N * self.q, self.n))
+        Q_bar = np.zeros((self.N * self.q, self.N * self.q))
+        R_bar = np.zeros((self.N * self.m, self.N * self.m))
 
         for k in range(1, self.N + 1):
-            for j in range(1, k + 1):
-                S_bar[(k-1)*self.q:k*self.q, (k-j)*self.m:(k-j+1)*self.m] = np.dot(np.dot(self.C, np.linalg.matrix_power(self.A, j-1)), self.B)
+            # Compute T_bar
+            T_bar_k = self.C @ np.linalg.matrix_power(self.A, k)
+            T_bar[(k-1)*self.q:k*self.q, :] = T_bar_k
 
-            T_bar[(k-1)*self.q:k*self.q, :self.n] = np.dot(self.C, np.linalg.matrix_power(self.A, k))
+            for j in range(1, k + 1):
+                # Compute S_bar
+                idx_row = (k-1)*self.q
+                idx_col = (j-1)*self.m
+                S_bar_kj = self.C @ np.linalg.matrix_power(self.A, k - j) @ self.B
+                S_bar[idx_row:idx_row + self.q, idx_col:idx_col + self.m] = S_bar_kj
 
             Q_bar[(k-1)*self.q:k*self.q, (k-1)*self.q:k*self.q] = self.Q
             R_bar[(k-1)*self.m:k*self.m, (k-1)*self.m:k*self.m] = self.R
@@ -56,9 +62,9 @@ class RegulatorModel:
         self.T_bar = T_bar
         self.Q_bar = Q_bar
         self.R_bar = R_bar
+
         if x_ref is not None:
-            self.x_ref_bar = np.kron(np.ones((self.N, 1)), x_ref)
-            self.x_ref_bar = self.x_ref_bar.flatten().reshape(-1, 1)
+            self.x_ref_bar = np.kron(np.ones((self.N, 1)), x_ref).flatten().reshape(-1, 1)
     
     def setSystemMatrices(self,delta_t,A,B):
         """
@@ -161,76 +167,30 @@ class RegulatorModel:
     # B_In input bound constraints (dict): A dictionary containing the input bound constraints.
     # B_Out output bound constraints (dict): A dictionary containing the output bound constraints.
     def regulator_W_std(self, B_Out, B_In):
-        # Check if 'min' fields are not empty and exist in B_Out and B_In
-        out_min_present = 'min' in B_Out and B_Out['min'] is not None
-        in_min_present = 'min' in B_In and B_In['min'] is not None
+        N, q, m = self.N, self.q, self.m
 
-        # if out_min_present:
-        #     if in_min_present:  # out min true, in min true
-        #         block1 = np.kron(np.ones((self.N, 1)), B_Out['max'])
-        #         block2 = np.kron(np.ones((self.N, 1)), -B_Out['min'])
-        #         block3 = np.kron(np.ones((self.N, 1)), B_In['max'])
-        #         block4 = np.kron(np.ones((self.N, 1)), -B_In['min'])
-        #     else:  # out min true, in min false
-        #         W = np.vstack([
-        #             np.kron(np.ones((self.N, 1)), B_Out['max']),
-        #             np.kron(np.ones((self.N, 1)), -B_Out['min']),
-        #             np.kron(np.ones((self.N, 1)), B_In['max']),
-        #             np.kron(np.ones((self.N, 1)), B_In['max'])
-        #         ])
-        # elif in_min_present:  # out min false, in min true
-        #     W = np.vstack([
-        #         np.kron(np.ones((self.N, 1)), B_Out['max']),
-        #         np.kron(np.ones((self.N, 1)), B_Out['max']),
-        #         np.kron(np.ones((self.N, 1)), B_In['max']),
-        #         np.kron(np.ones((self.N, 1)), B_In['min'])
-        #     ])
-        # else:  # out min false, in min false
-        #     W = np.vstack([
-        #         np.kron(np.ones((self.N, 1)), B_Out['max']),
-        #         np.kron(np.ones((self.N, 1)), B_Out['max']),
-        #         np.kron(np.ones((self.N, 1)), B_In['max']),
-        #         np.kron(np.ones((self.N, 1)), B_In['max'])
-        #     ])
+        # State constraints (upper and lower bounds)
+        block1 = np.kron(np.ones(N), B_Out['max'])   # Shape: (N * q,)
+        block2 = np.kron(np.ones(N), -B_Out['min'])  # Shape: (N * q,)
 
-        #if out_min_present:
-            #if in_min_present:  # out min true, in min true
-        block1 = np.kron(np.ones((self.N, 1)), B_Out['max'])
-        block2 = np.kron(np.ones((self.N, 1)), -B_Out['min'])
-        block3 = np.kron(np.ones((self.N, 1)), B_In['max'])
-        block4 = np.kron(np.ones((self.N, 1)), -B_In['min'])
-        #     else:  # out min true, in min false
-        #         block1 = np.kron(np.ones((self.N, 1)), B_Out['max'])
-        #         block2 = np.kron(np.ones((self.N, 1)), -B_Out['min'])
-        #         block3 = np.kron(np.ones((self.N, 1)), B_In['max'])
-        #         block4 = np.kron(np.ones((self.N, 1)), B_In['max'])  # Using max since min is not present
-        # else:
-        #     if in_min_present:  # out min false, in min true
-        #         block1 = np.kron(np.ones((self.N, 1)), B_Out['max'])
-        #         block2 = np.kron(np.ones((self.N, 1)), B_Out['max'])  # Repeating max since min is not present
-        #         block3 = np.kron(np.ones((self.N, 1)), B_In['max'])
-        #         block4 = np.kron(np.ones((self.N, 1)), -B_In['min'])
-        #     else:  # out min false, in min false
-        #         block1 = np.kron(np.ones((self.N, 1)), B_Out['max'])
-        #         block2 = np.kron(np.ones((self.N, 1)), B_Out['max'])
-        #         block3 = np.kron(np.ones((self.N, 1)), B_In['max'])
-        #         block4 = np.kron(np.ones((self.N, 1)), B_In['max'])
+        # Input constraints (upper and lower bounds)
+        block3 = np.kron(np.ones(N), B_In['max'])    # Shape: (N * m,)
+        block4 = np.kron(np.ones(N), -B_In['min'])   # Shape: (N * m,)
 
-        vec1 = block1.flatten().reshape(-1, 1)  
-        vec2 = block2.flatten().reshape(-1, 1)
-        vec3 = block3.flatten().reshape(-1, 1)
-        vec4 = block4.flatten().reshape(-1, 1)
+        # Combine all blocks into a single vector
+        W = np.concatenate([block1, block2, block3, block4]).reshape(-1, 1)  # Shape: ((2 * N * q + 2 * N * m), 1)
 
-        # Step 3: Vertically stack all vectors
-        W = np.vstack([vec1, vec2, vec3, vec4])  
         return W
 
     # added function to compute constraints matrices
-    def setConstraintsMatrices(self,B_in,B_out):
-
+    def setConstraintsMatrices(self, B_in, B_out):
         self.G = self.regulator_G_std(self.S_bar)
         self.S = self.regulator_S_std(self.T_bar)
         self.W = self.regulator_W_std(B_out, B_in)
+        # Optional: Print shapes for debugging
+        print(f"G shape: {self.G.shape}")
+        print(f"W shape: {self.W.shape}")
+        print(f"S shape: {self.S.shape}")
     
 
     # add constraints to the optimization problem
@@ -247,8 +207,9 @@ class RegulatorModel:
              # Constraint function
              def constraint(z, G, W, S, x0_mpc):
                  W_flat = W.flatten()
-                 # here we use inequality constraints of type Gz <= W + Sx0      +W+Sx0 -Gz >=  0
-                 return (+W_flat + S @ x0_mpc) -G @ z
+                 lhs = W_flat + (S @ x0_mpc).flatten()  # Shape: (Number of constraints,)
+                 rhs = (G @ z).flatten()                # Shape: (Number of constraints,)
+                 return lhs - rhs
 
              # Constraints dictionary
              cons = {'type': 'ineq', 'fun': constraint, 'args': (self.G, self.W, self.S, x0_mpc)}
@@ -260,8 +221,8 @@ class RegulatorModel:
 
          # Options to increase numerical accuracy
          options_dict = {
-             'ftol': 1e-12,        # Increase precision goal for the objective function 
-             'eps': 1e-12,         # Smaller step size for gradient approximation
+             'ftol': 1e-8,        # Increase precision goal for the objective function 
+             'eps': 1e-10,         # Smaller step size for gradient approximation
              'maxiter': 1000,      # Allow more iterations to find a more accurate solution
              'disp': False          # Display convergence messages for debugging
          }
