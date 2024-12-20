@@ -37,7 +37,6 @@ def main():
 
     # getting time step
     time_step = sim.GetTimeStep()
-    
 
     # initializing MPC
      # Define the matrices
@@ -52,7 +51,7 @@ def main():
     #
     # where each block is a 7x7 matrix.
 
-    A_cont = np.zeros((num_states, num_states))  # 14x14 matrix
+    A_cont = np.zeros((num_states, num_states))
     A_cont[0:num_joints, num_joints:num_states] = np.eye(num_joints)
 
     # Construct B matrix
@@ -64,19 +63,25 @@ def main():
 
     B_cont = np.zeros((num_states, num_controls))  # 14x7 matrix
     B_cont[num_joints:num_states, :] = np.eye(num_controls)
-    #A_cont = None
-    #B_cont = None
+    
+    #Verify Matrix Dimensions
+    assert A_cont.shape == (num_states, num_states), "A_cont dimensions are incorrect."
+    assert B_cont.shape == (num_states, num_controls), "B_cont dimensions are incorrect."
+    
+    # Discretise the Matrices
+    
     #Horizon length
     N_mpc = 10
     # Initialize the regulator model
     regulator = RegulatorModel(N_mpc, num_states, num_controls, num_states,constr_flag=constraints_flag)
     # define system matrices
     regulator.setSystemMatrices(time_step,A_cont,B_cont)
+
     # Define the cost matrices
 
-    Qcoeff_joint_pos = [100] * num_controls
+    Qcoeff_joint_pos = [500] * num_controls
     Qcoeff_joint_vel = [5] * num_controls
-    # making one vectro Qcoeff
+    # making one vector Qcoeff
     Qcoeff = np.hstack((Qcoeff_joint_pos, Qcoeff_joint_vel))
     Rcoeff = [0.1]*num_controls
 
@@ -89,12 +94,51 @@ def main():
     #x_ref = goal_joints
     x_ref = np.hstack([goal_joints, desired_velocities])
     regulator.propagation_model_regulator_fixed_std(x_ref)
+    regulator.compute_H_and_F()
     B_in = {'max': np.array([100000000000000] * num_controls), 'min': np.array([-1000000000000] * num_controls)}
     B_out = {'max': np.array([100000000]*num_states), 'min': np.array([-100000000]*num_states)}
     # creating constraints matrices
     regulator.setConstraintsMatrices(B_in,B_out)
     regulator.compute_H_and_F()
 
+    # Define tight constraints for joints 1, 2, and 3
+    joint_min_bounds = np.array([-0.5, -1.5, -10.5])
+    joint_max_bounds = np.array([0.5, 1.5, 10.5])
+
+    # For the rest of the joints, set large bounds
+    large_number = 1e6
+    joint_min_bounds_full = np.concatenate((joint_min_bounds, [-large_number] * (num_states - len(joint_min_bounds))))
+    joint_max_bounds_full = np.concatenate((joint_max_bounds, [large_number] * (num_states - len(joint_max_bounds))))
+
+    # Ensure the full bounds are NumPy arrays
+    joint_min_bounds_full = np.array(joint_min_bounds_full)
+    joint_max_bounds_full = np.array(joint_max_bounds_full)
+
+    # Define state constraints
+    B_out = {
+        'min': joint_min_bounds_full,
+        'max': joint_max_bounds_full
+    }
+
+    # Input constraints (assuming large bounds)
+    B_in = {
+        'min': np.full(num_controls, -large_number),
+        'max': np.full(num_controls, large_number)
+    }
+
+    # Set constraints in the regulator
+    regulator.setConstraintsMatrices(B_in, B_out)
+    
+    # Recompute S_bar and T_bar with the updated constraints
+    regulator.propagation_model_regulator_fixed_std(x_ref)
+    regulator.compute_H_and_F()
+    
+    print(f"S_bar shape: {regulator.S_bar.shape}")
+    print(f"T_bar shape: {regulator.T_bar.shape}")
+    print(f"G shape: {regulator.G.shape}")
+    print(f"W shape: {regulator.W.shape}")
+    print(f"S shape: {regulator.S.shape}")
+    
     # Data storage
     q_mes_all, qd_mes_all, u_mpc_all, time_all = [], [], [], []
 
@@ -104,9 +148,7 @@ def main():
     current_time = 0.0
     total_time = 5.0
 
-    while current_time < 10.0:
-
-
+    while current_time < total_time:
         # Measured state 
         q_mes = sim.GetMotorAngles(0)
         qd_mes = sim.GetMotorVelocities(0)
@@ -127,7 +169,7 @@ def main():
         time_all.append(current_time)
         
         # Return the optimal control sequence
-        u_mpc = u_mpc[0:num_controls] 
+        u_mpc = u_mpc[:num_controls] 
         tau_cmd = dyn_cancel(dyn_model, q_mes, qd_mes, u_mpc)
         cmd.SetControlCmd(tau_cmd, ["torque"]*7)
         sim.Step(cmd, "torque")
