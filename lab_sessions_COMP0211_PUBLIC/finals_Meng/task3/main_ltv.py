@@ -3,7 +3,7 @@ import time
 import os
 import matplotlib.pyplot as plt
 from simulation_and_control import pb, MotorCommands, PinWrapper, feedback_lin_ctrl, dyn_cancel, SinusoidalReference, CartesianDiffKin
-from tracker_model import TrackerModel
+from tracker_model_ltv import TrackerModel
 
 
 
@@ -154,11 +154,15 @@ def main():
         for j in range(N_mpc):
             q_d, qd_d = ref.get_values(current_time + j*time_step)
             
+            
             # here i need to stack the q_d and qd_d
             x_ref.append(np.vstack((q_d.reshape(-1, 1), qd_d.reshape(-1, 1))))
         
         x_ref = np.vstack(x_ref).flatten()
-        
+
+        # compute A and B for ltv
+        dyn_model.ComputeAllTerms(q_mes, qd_mes)
+        tracker.compute_A_and_B(dyn_model.res.M, dyn_model.res.c, q_mes, qd_mes, time_step, num_joints)
 
         # Compute the optimal control sequence
         u_star = tracker.computesolution(x_ref,x0_mpc,u_mpc, H, Ftra,initial_guess=u_star)
