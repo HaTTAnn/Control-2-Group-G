@@ -69,6 +69,7 @@ def print_joint_info(sim, dyn_model, controlled_frame_name):
 
 
 def main():
+    
     # Configuration
     conf_file_name = "pandaconfig.json"
     controlled_frame_name = "panda_link8"
@@ -94,12 +95,26 @@ def main():
     
     # Horizon length
     N_mpc = 10
+    # Sinusoidal reference
+    # Specify different amplitude values for each joint
+    amplitudes = [np.pi/4, np.pi/6, np.pi/4, np.pi/4, np.pi/4, np.pi/4, np.pi/4]  # Example amplitudes for joints
+    # Specify different frequency values for each joint
+    frequencies = [0.4, 0.5, 0.4, 0.4, 0.4, 0.4, 0.4]  # Example frequencies for joints
+
+    # Convert lists to NumPy arrays for easier manipulation in computations
+    amplitude = np.array(amplitudes)
+    frequency = np.array(frequencies)
+    ref = SinusoidalReference(amplitude, frequency, sim.GetInitMotorAngles())  # Initialize the reference
 
     # Initialize the regulator model
     tracker = TrackerModel( N_mpc, num_states, num_joints, num_states, sim.GetTimeStep(),constr_flag=constraints_flag)
-    tracker.setSystemMatrices()
-    p_w = 10000
-    v_w = 10
+    q_d, qd_d = ref.get_values(0)
+    q_mes = sim.GetMotorAngles(0)
+    time_step = sim.GetTimeStep()
+    dq = (q_mes - q_d) / time_step
+    tracker.setSystemMatrices(dyn_model, q_d, qd_d, dq) 
+    p_w = 100
+    v_w = 100
     Qcoeff = np.array([p_w, p_w, p_w,p_w, p_w, p_w,p_w, v_w, v_w, v_w,v_w, v_w, v_w,v_w])
     Rcoeff = [0.1] * num_joints
     tracker.setCostMatrices(Qcoeff, Rcoeff)
@@ -117,16 +132,6 @@ def main():
     B_out = {'max': max_state_constraints, 'min': min_state_constraints}
     tracker.setConstraintsMatrices(B_in,B_out,S_bar_C,T_bar_C)
     
-    # Sinusoidal reference
-    # Specify different amplitude values for each joint
-    amplitudes = [np.pi/4, np.pi/6, np.pi/4, np.pi/4, np.pi/4, np.pi/4, np.pi/4]  # Example amplitudes for joints
-    # Specify different frequency values for each joint
-    frequencies = [0.4, 0.5, 0.4, 0.4, 0.4, 0.4, 0.4]  # Example frequencies for joints
-
-    # Convert lists to NumPy arrays for easier manipulation in computations
-    amplitude = np.array(amplitudes)
-    frequency = np.array(frequencies)
-    ref = SinusoidalReference(amplitude, frequency, sim.GetInitMotorAngles())  # Initialize the reference
 
 
     # Main control loop
@@ -140,6 +145,7 @@ def main():
     u_mpc = np.zeros(num_joints)
     u_star = np.zeros(num_joints*N_mpc)
     for i in range(steps):
+        print(f'current: {i}')
         # measure current state
         q_mes = sim.GetMotorAngles(0)
         qd_mes = sim.GetMotorVelocities(0)
@@ -154,15 +160,21 @@ def main():
         for j in range(N_mpc):
             q_d, qd_d = ref.get_values(current_time + j*time_step)
             
-            
             # here i need to stack the q_d and qd_d
             x_ref.append(np.vstack((q_d.reshape(-1, 1), qd_d.reshape(-1, 1))))
         
         x_ref = np.vstack(x_ref).flatten()
-
-        # compute A and B for ltv
-        dyn_model.ComputeAllTerms(q_mes, qd_mes)
-        tracker.compute_A_and_B(dyn_model.res.M, dyn_model.res.c, q_mes, qd_mes, time_step, num_joints)
+        
+        #
+        q_d, qd_d = ref.get_values(current_time)
+        tracker.setSystemMatrices(dyn_model, q_d, qd_d, q_d-qd_mes) 
+        
+        # Compute the matrices needed for MPC optimization
+        S_bar, S_bar_C, T_bar, T_bar_C, Q_hat, Q_bar, R_bar = tracker.propagation_model_tracker_fixed_std()
+        H,Ftra = tracker.tracker_std(S_bar, T_bar, Q_hat, Q_bar, R_bar)
+        # # Define the constraints
+        tracker.setConstraintsMatrices(B_in,B_out,S_bar_C,T_bar_C)
+        #
 
         # Compute the optimal control sequence
         u_star = tracker.computesolution(x_ref,x0_mpc,u_mpc, H, Ftra,initial_guess=u_star)
@@ -188,7 +200,7 @@ def main():
 
 
         # Store data for plotting
-        q_mes_all.append(q_mes)
+        q_mes_all.append(q_mes-(amplitudes))
         qd_mes_all.append(qd_mes)
         u_mpc_all.append(u_mpc.copy())
         time_all.append(current_time)
@@ -238,6 +250,7 @@ def main():
         plt.legend()
 
         plt.tight_layout()
+        plt.savefig(f'joint_{i}.png')
         plt.show()
     
      

@@ -1,5 +1,6 @@
 import numpy as np
 from scipy.optimize import minimize
+from scipy.linalg import inv
 
 class TrackerModel:
     def __init__(self, N, q, m, n, delta,constr_flag=True):
@@ -21,7 +22,7 @@ class TrackerModel:
         self.delta = delta
         self.constr_flag = constr_flag
 
-    
+       
 
     def tracker_std(self,S_bar, T_bar, Q_hat, Q_bar, R_bar):
         # Compute H
@@ -34,29 +35,109 @@ class TrackerModel:
         
         return H, F_tra
     
-    def setSystemMatrices(self,damping_coefficients=None):
+    def setSystemMatrices(self, dyn_model, q_d, dq_d, dq, damping_coefficients=None):
+        np.set_printoptions(linewidth=120)  
+        # Compute mass matrix and its inverse
+        dyn_model.ComputeMassMatrix(q_d)
+        M = dyn_model.res.M
+        M_inv = inv(M)
+        # print(M_inv)
 
+        # Compute Coriolis matrix
+        dyn_model.ComputeCoriolisMatrix(q_d, dq_d)
+        C = dyn_model.res.N
+        # print(C)
+
+        # Compute Jacobian of C(q, dq) * dq with respect to q (numerically or symbolically)
+        # Placeholder for derivative computation (numerical differentiation)
+        def jacobian_of_coriolis_product(q_d, dq_d, dyn_model, dq):
+            """
+            Compute the Jacobian of C(q_d, dq_d) * dq_d with respect to q_d numerically.
+
+            Args:
+                q_d (np.ndarray): Desired joint positions (n,).
+                dq_d (np.ndarray): Desired joint velocities (n,).
+                compute_coriolis (callable): Function to compute the Coriolis matrix C(q, dq).
+                delta (float): Small perturbation for finite differences.
+
+            Returns:
+                np.ndarray: Jacobian matrix (n x n).
+            """
+            n = len(q_d)
+            jacobian = np.zeros((n, n))  # Initialize the Jacobian
+
+            # Compute f(q) = C(q, dq_d) * dq_d
+            dyn_model.ComputeCoriolisMatrix(q_d, dq_d) 
+            f_q = dyn_model.res.N @ dq_d
+
+            # Calculate dynamic epsilon (perturbation step)
+            epsilon = dq
+
+            # Perturb each element of q_d
+            for i in range(n):
+                q_d_perturbed = q_d.copy()
+                q_d_perturbed[i] += epsilon[i]  # Add dynamic perturbation to the i-th element
+
+                # Compute f(q + epsilon)
+                dyn_model.ComputeCoriolisMatrix(q_d_perturbed, dq_d) 
+                f_q_perturbed = dyn_model.res.N @ dq_d
+
+                # Compute finite difference approximation for the i-th column of the Jacobian
+                jacobian[:, i] = (f_q_perturbed - f_q) / epsilon[i]
+            
+                
+
+            return jacobian
+        dC_dq = jacobian_of_coriolis_product(q_d, dq_d, dyn_model, dq)
+        # print(dC_dq)
+        # print(dC_dq.shape)
+        
+
+        # Construct Ak
+        n = len(q_d)  # Number of degrees of freedom
+        A = np.zeros((2 * n, 2 * n))
+        A[:n, n:] = np.eye(n)  # Top-right block
+        A[n:, :n] = -M_inv @ dC_dq  # Bottom-left block
+        # print((-M_inv @ C).shape)
+        A[n:, n:] = -M_inv @ C# Bottom-right block
+
+        # Construct Bk
+        B = np.zeros((2 * n, n))
+        B[n:, :] = M_inv  # Bottom block
+        
+        # print(A)
+        
+        # print(B)
+
+        
+        
+        # --------------------------------------------
+        
         num_states = 2 * self.m
         num_controls = self.m
         num_joints = self.m
         
         
-        # Initialize A matrix
-        A_cont = np.zeros((num_states,num_states))
+        # # Initialize A matrix
+        # A_cont = np.zeros((num_states,num_states))
         
-        # Upper right quadrant of A (position affected by velocity)
-        A_cont[:num_joints, num_joints:] = np.eye(num_joints) 
+        # # Upper right quadrant of A (position affected by velocity)
+        # A_cont[:num_joints, num_joints:] = np.eye(num_joints) 
         
-        # Lower right quadrant of A (velocity affected by damping)
-        #if damping_coefficients is not None:
-        #    damping_matrix = np.diag(damping_coefficients)
-        #    A[num_joints:, num_joints:] = np.eye(num_joints) - time_step * damping_matrix
+        # # Lower right quadrant of A (velocity affected by damping)
+        # #if damping_coefficients is not None:
+        # #    damping_matrix = np.diag(damping_coefficients)
+        # #    A[num_joints:, num_joints:] = np.eye(num_joints) - time_step * damping_matrix
         
-        # Initialize B matrix
-        B_cont = np.zeros((num_states, num_controls))
+        # # Initialize B matrix
+        # B_cont = np.zeros((num_states, num_controls))
         
-        # Lower half of B (control input affects velocity)
-        B_cont[num_joints:, :] = np.eye(num_controls) 
+        # # Lower half of B (control input affects velocity)
+        # B_cont[num_joints:, :] = np.eye(num_controls) 
+        A_cont = A
+        B_cont = B
+        # print(A_cont)
+        # print(B_cont)
 
         C_cont = np.eye(num_states)
 
@@ -70,7 +151,10 @@ class TrackerModel:
         A_upper = np.hstack((A_upper_left, A_upper_right))
         A_lower = np.hstack((A_lower_left, A_lower_right))
         A = np.vstack((A_upper, A_lower))
-
+        
+        
+              
+        
         # Alternatively, using np.block for clarity
         self.A = np.block([
             [np.eye(self.orig_n) + self.delta * A_cont, self.delta * B_cont],
@@ -85,64 +169,10 @@ class TrackerModel:
 
         # Update self.n to the extended state dimension 
         self.n = A.shape[0]  # Extended state dimension
-        
-    def compute_A_and_B(self, M_qd, C_qd_qdotd, q_d, q_dot_d, delta, m):
-        """
-        Compute the Jacobian matrices A_k and B_k for a manipulator system with LTV MPC formulation.
-
-        Parameters:
-        - M: mass matrix M(q) 
-        - C: Coriolis matrix C(q, q_dot) 
-        - q_d: Desired joint positions (q_d(k)) at the current time step k.
-        - q_dot_d: Desired joint velocities (q_dot_d(k)) at the current time step k.
-        - delta: Time step (used in discrete system approximation).
-        - m: Number of joints.
-
-        Returns:
-        - A: Jacobian matrix A_k (2m x 2m).
-        - B: Jacobian matrix B_k (2m x m).
-        """
-
-        num_states = 2 * m
-        num_controls = m
-
-        # Compute M(q_d(k)) and its inverse
-        M_inv_qd = np.linalg.inv(M_qd)
-
-        # Compute the derivative of C with respect to q (numerical approximation or symbolic)
-        dC_dq = np.zeros_like(C_qd_qdotd)  # Replace with the actual derivative if needed
-
-        # Initialize A matrix (2m x 2m)
-        A = np.zeros((num_states, num_states))
-
-        # Upper right quadrant of A (position affected by velocity)
-        A[:m, m:] = np.eye(m)
-
-        # Lower right quadrant of A (velocity affected by damping)
-        A[m:, :m] = -np.dot(M_inv_qd, (dC_dq @ q_dot_d))
-        A[m:, m:] = -np.dot(M_inv_qd, C_qd_qdotd)
-
-        # Initialize B matrix (2m x m)
-        B = np.zeros((num_states, num_controls))
-
-        # Lower half of B (control input affects velocity)
-        B[m:, :] = M_inv_qd
-
-        # Convert to discrete-time system using the time step delta
-        A_cont = A * delta
-        B_cont = B * delta
-
-        # Compute the final A and B matrices
-        A_final = np.block([
-            [np.eye(m) + delta * A_cont[:m, :m], delta * B_cont[:m, :]],
-            [np.zeros((m, m)), np.eye(m)]
-        ])
-
-        B_final = np.vstack((delta * B_cont[:m, :], np.eye(m)))
-
-        self.A, self.B = A_final, B_final
-        return 
-
+        # print('printing A')
+        # print(self.A)
+        # print('printing B')
+        # print(self.B)
 
     # TODO you can change this function to allow for more passing a vector of gains
     def setCostMatrices(self, Qcoeff, Rcoeff):
@@ -356,10 +386,10 @@ class TrackerModel:
 
         # Options to increase numerical accuracy
         options_dict = {
-            'ftol': 1e-12,        # Increase precision goal for the objective function 
-            'eps': 1e-12,         # Smaller step size for gradient approximation
+            'ftol': 1e-6,        # Increase precision goal for the objective function 
+            'eps': 1e-6,         # Smaller step size for gradient approximation
             'maxiter': 1000,      # Allow more iterations to find a more accurate solution
-            'disp': True          # Display convergence messages for debugging
+            'disp': True         # Display convergence messages for debugging
         }
 
         # Run the optimization

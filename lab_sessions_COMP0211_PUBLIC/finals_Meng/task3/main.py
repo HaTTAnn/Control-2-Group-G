@@ -140,6 +140,7 @@ def main():
     u_mpc = np.zeros(num_joints)
     u_star = np.zeros(num_joints*N_mpc)
     for i in range(steps):
+        print(f'current: {i}')
         # measure current state
         q_mes = sim.GetMotorAngles(0)
         qd_mes = sim.GetMotorVelocities(0)
@@ -234,6 +235,7 @@ def main():
         plt.legend()
 
         plt.tight_layout()
+        plt.savefig(f'joint_{i}.png')
         plt.show()
     
      
