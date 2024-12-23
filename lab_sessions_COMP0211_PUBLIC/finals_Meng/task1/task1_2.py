@@ -14,8 +14,8 @@ R_a = 1.0     # Armature resistance (Ohm)
 L_a = 0.001   # Armature inductance (H)
 
 # Desired Eigenvalues for Observer
-lambda_1 = -6.00
-lambda_2 = -8.0
+lambda_1 = -11
+lambda_2 = -600
 
 # Simulation Parameters
 t_start = 0.0
@@ -50,11 +50,11 @@ regulator = RegulatorModel(N_mpc, num_states, num_controls, num_states,constr_fl
 regulator.setSystemMatrices(dt,motor_model.getA(),motor_model.getB())
 # Define the cost matrices
 
-Qcoeff = [1000.0,0.0]
-Rcoeff = [0.01]*num_controls
+Qcoeff = [1000,0.0]
+Rcoeff = [0.06]*num_controls
 
 regulator.setCostMatrices(Qcoeff,Rcoeff)
-x_ref = np.array([-10,0])
+x_ref = np.array([-100,0])
 regulator.propagation_model_regulator_fixed_std(x_ref)
 B_in = {'max': np.array([100000000000000] * num_controls), 'min': np.array([-1000000000000] * num_controls)}
 B_out = {'max': np.array([100000000,1000000000]), 'min': np.array([-100000000,-1000000000])}
@@ -81,7 +81,7 @@ for k in range(num_steps):
     t = time[k]
     
     # compute control input
-    u_mpc = regulator.compute_solution(x_hat_cur)
+    u_mpc = regulator.compute_solution(x_cur)
     V_a = u_mpc[0]
 
     cur_y = motor_model.step(V_a)
@@ -101,6 +101,46 @@ for k in range(num_steps):
     T_m_true[k] = K_t * I_a[k]
     T_m_estimated[k] = K_t * hat_I_a[k]
     V_terminal_hat[k] = y_hat_cur
+
+# Function to calculate settling time
+def calculate_settling_time(time, signal, threshold=0.02):
+    steady_state = signal[-1]
+    lower_bound = steady_state * (1 - threshold)
+    upper_bound = steady_state * (1 + threshold)
+    
+    for i in reversed(range(len(signal))):
+        if not (lower_bound <= signal[i] <= upper_bound):
+            if i + 1 < len(time):
+                return time[i + 1]  # Settling time is the next time step
+            else:
+                return time[-1]  # Avoid index out of bounds
+    return time[-1]
+
+# Function to calculate overshoot
+def calculate_overshoot(signal):
+    steady_state = signal[-1]
+    peak_value = np.max(signal)
+    overshoot = (peak_value - steady_state) / steady_state * 100
+    return overshoot
+
+# Function to calculate steady-state error
+def calculate_steady_state_error(signal, reference):
+    steady_state = signal[-1]
+    error = reference - steady_state
+    return error
+
+# Reference values
+omega_ref = 100
+
+# Calculate metrics
+settling_time_omega = calculate_settling_time(time, omega)
+overshoot_omega = calculate_overshoot(omega)
+steady_state_error_omega = calculate_steady_state_error(omega, omega_ref)
+
+# Print results
+print("Settling Time for Angular Velocity:", settling_time_omega, "s")
+print("Overshoot for Angular Velocity:", overshoot_omega, "%")
+print("Steady-State Error for Angular Velocity:", steady_state_error_omega)
 
 # Plotting the results
 plt.figure(figsize=(12, 10))
@@ -146,7 +186,6 @@ plt.legend()
 plt.grid(True)
 
 plt.tight_layout()
-plt.savefig('task2')
 plt.show()
 
 

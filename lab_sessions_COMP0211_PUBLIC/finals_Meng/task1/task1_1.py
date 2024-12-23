@@ -12,7 +12,7 @@ R_a = 1.0     # Armature resistance (Ohm)
 L_a = 0.001   # Armature inductance (H)
 
 # Desired Eigenvalues for Observer
-lambda_1 = -500.0
+lambda_1 = -11.0
 lambda_2 = -600.0
 
 # Simulation Parameters
@@ -114,5 +114,4 @@ plt.legend()
 plt.grid(True)
 
 plt.tight_layout()
-plt.savefig('task1')
 plt.show()
